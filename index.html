@@ -1,0 +1,426 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width,initial-scale=1" />
+  <title>Control IoT</title>
+
+  <!-- Tailwind -->
+  <script src="https://cdn.tailwindcss.com"></script>
+  <!-- Lucide icons -->
+  <script src="https://unpkg.com/lucide@latest"></script>
+  <!-- SweetAlert2 -->
+  <script src="https://cdn.jsdelivr.net/npm/sweetalert2@11"></script>
+  <!-- ECharts -->
+  <script src="https://cdn.jsdelivr.net/npm/echarts@5/dist/echarts.min.js"></script>
+
+  <style>
+    body {
+      font-family: 'Montserrat', sans-serif;
+      background: radial-gradient(circle at 50% 55%, #0f1624 0%, #07090b 72%, #000 100%);
+      color: #dfe7ff;
+      margin: 0;
+      -webkit-font-smoothing:antialiased;
+      -moz-osx-font-smoothing:grayscale;
+    }
+
+    /* small global helpers */
+    .astro-card {
+      background: rgba(12,18,32,0.6);
+      border:1px solid rgba(255,255,255,0.04);
+      border-radius:12px;
+      padding:14px;
+      backdrop-filter: blur(6px);
+    }
+
+    /* layout: sensors left, chart right */
+    .main-row { display:flex; gap:16px; align-items:flex-start; flex-wrap:wrap; }
+    .col-left { flex: 0 1 360px; min-width:300px; }
+    .col-right { flex: 1 1 560px; min-width:320px; }
+
+    /* orbe sensor */
+    .sensor-orb {
+      width:120px; height:120px; border-radius:999px;
+      display:flex; align-items:center; justify-content:center;
+      position:relative; transition: all 450ms cubic-bezier(.2,.9,.2,1);
+      box-shadow: 0 6px 22px rgba(0,0,0,0.6), inset 0 -6px 30px rgba(0,0,0,0.35);
+      filter: drop-shadow(0 6px 18px rgba(0,0,0,0.5));
+    }
+    .orb-halo {
+      position:absolute; inset:-18px; border-radius:999px; pointer-events:none;
+      transition: opacity 480ms, transform 480ms;
+      filter: blur(18px);
+      opacity:0.55;
+    }
+    .orb-value {
+      position:relative; z-index:2; font-weight:700; font-size:1.05rem; color:#0b1020;
+      text-shadow: 0 1px 0 rgba(255,255,255,0.06);
+      background: linear-gradient(180deg, rgba(255,255,255,0.95), rgba(240,240,240,0.92));
+      padding:4px 10px; border-radius:999px;
+    }
+
+    /* sensors grid */
+    .sensors-grid { display:grid; grid-template-columns: repeat(2, 1fr); gap:12px; margin-top:12px; }
+
+    #chartAvg { width:100%; height:320px; border-radius:10px; background: linear-gradient(180deg,#07080a,#0b0d11); border:1px solid rgba(255,255,255,0.03); }
+
+    /* status indicator */
+    #statusIndicator {
+      position: fixed; bottom:14px; left:14px; z-index:60;
+      padding:8px 12px; border-radius:10px; font-size:0.9rem;
+      backdrop-filter: blur(6px);
+      border:1px solid rgba(255,255,255,0.03);
+    }
+
+    /* small responsive */
+    @media (max-width:920px) {
+      .main-row { flex-direction: column; }
+      .col-left, .col-right { min-width: 100% }
+      .sensor-orb { width:100px; height:100px; }
+    }
+  </style>
+</head>
+<body>
+
+  <!-- simple decorative background elements (kept minimal for perf) -->
+  <div style="position:fixed;inset:0;background:radial-gradient(circle at 30% 30%, rgba(80,120,160,0.06), transparent 12%, transparent 100%), radial-gradient(circle at 80% 70%, rgba(120,60,160,0.04), transparent 10%);z-index:-1;"></div>
+
+  <div class="relative z-10 max-w-5xl mx-auto p-6 min-h-screen flex flex-col gap-6">
+
+    <!-- header -->
+    <header class="flex items-center justify-between">
+      <div style="flex:1;text-align:center">
+        <h1 style="margin:0;font-size:1.6rem;letter-spacing:6px;color:#bfe3ff;font-weight:700">Control IoT</h1>
+      </div>
+
+      <button onclick="openConfig()" class="p-2 rounded-full bg-slate-900/60 border border-blue-500/12 hover:bg-slate-800 transition">
+        <i data-lucide="settings" class="w-6 h-6 text-blue-300"></i>
+      </button>
+    </header>
+
+    <!-- controls (left as-is) -->
+    <div class="astro-card" style="display:flex;gap:12px;align-items:center;justify-content:space-between;">
+      <div>
+        <strong style="color:#bfe3ff">Controles</strong>
+        <div style="color:#9fc7ff;font-size:0.9rem">Sala · Laboratorio</div>
+      </div>
+
+      <div style="display:flex;gap:8px">
+        <button onclick="updateState('sala', true)" class="px-3 py-2 rounded bg-emerald-600/12">Sala ON</button>
+        <button onclick="updateState('sala', false)" class="px-3 py-2 rounded bg-red-600/12">Sala OFF</button>
+        <button onclick="updateState('laboratorio', true)" class="px-3 py-2 rounded bg-emerald-600/12">Lab ON</button>
+        <button onclick="updateState('laboratorio', false)" class="px-3 py-2 rounded bg-red-600/12">Lab OFF</button>
+      </div>
+    </div>
+
+    <!-- main row: sensors left, chart right -->
+    <div class="main-row">
+
+      <!-- LEFT: sensors -->
+      <div class="col-left">
+        <div class="astro-card">
+          <div style="display:flex;justify-content:space-between;align-items:center;">
+            <div>
+              <strong style="color:#bfe3ff">Sensores DS18B20</strong>
+              <div style="font-size:0.9rem;color:#9fc7ff">Lecturas individuales</div>
+            </div>
+            <div style="text-align:right;color:#9fc7ff">
+              Promedio (válidos): <span id="avgNow">-- °C</span>
+            </div>
+          </div>
+
+          <div class="sensors-grid" style="margin-top:12px">
+            <!-- Sensor 1 -->
+            <div style="display:flex;gap:10px;align-items:center">
+              <div id="orb1" class="sensor-orb" style="background:linear-gradient(180deg,#0b2a48,#072033)">
+                <div id="halo1" class="orb-halo" style="background: radial-gradient(circle, rgba(43,156,255,0.45), transparent 60%);"></div>
+                <div id="val1" class="orb-value">--</div>
+              </div>
+              <div style="font-weight:600;color:#cfe6ff">Sensor 1</div>
+            </div>
+
+            <!-- Sensor 2 -->
+            <div style="display:flex;gap:10px;align-items:center">
+              <div id="orb2" class="sensor-orb" style="background:linear-gradient(180deg,#0b2a48,#072033)">
+                <div id="halo2" class="orb-halo" style="background: radial-gradient(circle, rgba(43,156,255,0.45), transparent 60%);"></div>
+                <div id="val2" class="orb-value">--</div>
+              </div>
+              <div style="font-weight:600;color:#cfe6ff">Sensor 2</div>
+            </div>
+
+            <!-- Sensor 3 -->
+            <div style="display:flex;gap:10px;align-items:center">
+              <div id="orb3" class="sensor-orb" style="background:linear-gradient(180deg,#0b2a48,#072033)">
+                <div id="halo3" class="orb-halo" style="background: radial-gradient(circle, rgba(43,156,255,0.45), transparent 60%);"></div>
+                <div id="val3" class="orb-value">--</div>
+              </div>
+              <div style="font-weight:600;color:#cfe6ff">Sensor 3</div>
+            </div>
+
+            <!-- Sensor 4 -->
+            <div style="display:flex;gap:10px;align-items:center">
+              <div id="orb4" class="sensor-orb" style="background:linear-gradient(180deg,#0b2a48,#072033)">
+                <div id="halo4" class="orb-halo" style="background: radial-gradient(circle, rgba(43,156,255,0.45), transparent 60%);"></div>
+                <div id="val4" class="orb-value">--</div>
+              </div>
+              <div style="font-weight:600;color:#cfe6ff">Sensor 4</div>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <!-- RIGHT: chart -->
+      <div class="col-right">
+        <div class="astro-card" style="display:flex;flex-direction:column;gap:10px;">
+          <div style="display:flex;justify-content:space-between;align-items:center;">
+            <div>
+              <strong style="color:#bfe3ff">Temperatura Promedio</strong>
+              <div style="color:#9fc7ff;font-size:0.9rem">Promedio en tiempo real (datos válidos)</div>
+            </div>
+            <div style="font-weight:700;color:#bfe3ff" id="avgNowHeader">-- °C</div>
+          </div>
+
+          <div id="chartAvg"></div>
+        </div>
+      </div>
+    </div>
+
+    <div id="statusIndicator" style="background:rgba(220,40,40,0.06); color:#ff7b7b; border:1px solid rgba(255,120,120,0.06)">
+      Desconectado
+    </div>
+
+    <footer style="text-align:center;color:#9fc7ff;font-size:0.85rem;padding-top:10px">
+      Desarrolladores: Isaac García • Miguel Ruiz
+    </footer>
+  </div>
+
+  <!-- CONFIG MODAL -->
+  <div id="configModal" class="fixed inset-0 hidden z-50 bg-black/70 backdrop-blur-sm flex items-center justify-center">
+    <div class="astro-card" style="max-width:520px;width:92%">
+      <h3 style="margin:0 0 10px 0;color:#bfe3ff">Configuración Firebase</h3>
+      <label style="font-size:12px;color:#9fc7ff">API KEY</label>
+      <input id="apiKeyInput" style="width:100%;padding:8px;margin:6px 0;border-radius:8px;background:#071022;color:#dceeff;border:1px solid rgba(140,190,255,0.06)">
+      <label style="font-size:12px;color:#9fc7ff">DATABASE URL</label>
+      <input id="dbUrlInput" style="width:100%;padding:8px;margin:6px 0;border-radius:8px;background:#071022;color:#dceeff;border:1px solid rgba(140,190,255,0.06)">
+      <div style="display:flex;gap:8px;margin-top:10px">
+        <button onclick="closeConfig()" style="flex:1;padding:8px;border-radius:8px;background:#1f2a3a;color:#dfe7ff;border:1px solid rgba(255,255,255,0.04)">Cancelar</button>
+        <button onclick="saveConfig()" style="flex:1;padding:8px;border-radius:8px;background:#6fb1ff;color:#001622">Guardar</button>
+      </div>
+    </div>
+  </div>
+
+<script type="module">
+  import { initializeApp } from "https://www.gstatic.com/firebasejs/10.7.1/firebase-app.js";
+  import { getDatabase, ref, onValue, set } from "https://www.gstatic.com/firebasejs/10.7.1/firebase-database.js";
+
+  // Lightweight helpers & state
+  let app = null;
+  let db = null;
+  let connectedCasa = false;
+  let connectedSensores = false;
+
+  // ECharts setup (optimized)
+  const chartDom = document.getElementById('chartAvg');
+  const chart = echarts.init(chartDom, null, { renderer: 'canvas', useDirtyRect: false });
+  const MAX_POINTS = 120;
+  const times = [];
+  const values = [];
+
+  chart.setOption({
+    backgroundColor: 'transparent',
+    tooltip: { trigger: 'axis', formatter: (p)=> (p && p[0]) ? `${p[0].axisValue}<br/>Promedio: ${p[0].data} °C` : '' },
+    xAxis: { type:'category', boundaryGap:false, data: times, axisLine:{ show:false }, axisLabel:{ color:'#9fbcd6' } },
+    yAxis: { type:'value', axisLine:{ show:false }, splitLine:{lineStyle:{ color:'#0f1720' }}, axisLabel:{ color:'#9fbcd6' } },
+    grid: { left:'6%', right:'6%', top:'8%', bottom:'10%' },
+    series: [{ name:'Promedio', type:'line', smooth:true, data: values, showSymbol:false, lineStyle:{ width:3, color:'#7dd3fc' }, areaStyle:{ color:'rgba(125,211,252,0.08)' } }]
+  });
+
+  function pushAverage(avg) {
+    const t = new Date().toLocaleTimeString();
+    if (times.length >= MAX_POINTS) { times.shift(); values.shift(); }
+    times.push(t); values.push(Number(avg.toFixed(2)));
+    // only update series data (cheap)
+    chart.setOption({ xAxis:{ data: times }, series:[{ data: values }] }, false, false);
+  }
+
+  // Orbs helpers
+  function tempToColor(t){
+    const temp = Math.max(0, Math.min(50, Number(t) || 0));
+    if (temp <= 18) {
+      // blue -> cyan
+      const r = 43 + Math.round((50-43)*(temp/18));
+      return { bg: `linear-gradient(180deg,#062a47,#022134)`, halo: `rgba(43,156,255,0.28)` , textColor:'#071127' };
+    } else if (temp <= 25) {
+      return { bg:`linear-gradient(180deg,#083846,#053238)`, halo:`rgba(50,209,201,0.28)`, textColor:'#071127' };
+    } else if (temp <= 35) {
+      return { bg:`linear-gradient(180deg,#3a2c08,#261b06)`, halo:`rgba(255,159,28,0.28)`, textColor:'#1a0f00' };
+    } else {
+      return { bg:`linear-gradient(180deg,#4c0a06,#2b0503)`, halo:`rgba(255,46,46,0.32)`, textColor:'#200a06' };
+    }
+  }
+
+  // Update orb and numeric
+  function updateOrb(index, rawValue) {
+    const v = (typeof rawValue === 'number' && !isNaN(rawValue)) ? Number(rawValue) : NaN;
+    const orb = document.getElementById('orb'+index);
+    const halo = document.getElementById('halo'+index);
+    const valEl = document.getElementById('val'+index);
+
+    if (isNaN(v)) {
+      valEl.innerText = '--';
+      orb.style.transform = 'scale(1)';
+      halo.style.opacity = '0.12';
+      orb.style.background = 'linear-gradient(180deg,#0b1622,#07121a)';
+      halo.style.background = 'radial-gradient(circle, rgba(80,80,80,0.06), transparent 60%)';
+    } else {
+      valEl.innerText = v.toFixed(2);
+      const col = tempToColor(v);
+      orb.style.background = col.bg;
+      halo.style.background = `radial-gradient(circle, ${col.halo}, transparent 60%)`;
+      halo.style.opacity = 0.9;
+      // gentle scale based on temperature
+      const s = 1 + Math.min(0.14, (v-10)/200);
+      orb.style.transform = `scale(${s})`;
+    }
+  }
+
+  // Status UI
+  function updateStatusAll() {
+    const el = document.getElementById('statusIndicator');
+    const ok = connectedCasa || connectedSensores;
+    if (ok) {
+      el.innerText = 'Conectado';
+      el.style.background = 'rgba(20,160,120,0.06)';
+      el.style.color = '#7bf0b7';
+      el.style.border = '1px solid rgba(50,200,140,0.06)';
+    } else {
+      el.innerText = 'Desconectado';
+      el.style.background = 'rgba(220,40,40,0.06)';
+      el.style.color = '#ff7b7b';
+      el.style.border = '1px solid rgba(255,120,120,0.06)';
+    }
+  }
+
+  // init Firebase
+  function initFirebase(apiKey, databaseURL) {
+    try {
+      app = initializeApp({ apiKey: apiKey, databaseURL: databaseURL });
+      db = getDatabase(app);
+
+      // listen controls (casa) to keep icons updated as before
+      const casaRef = ref(db, 'casa');
+      onValue(casaRef, snap => {
+        const data = snap.val();
+        connectedCasa = true;
+        updateStatusAll();
+        if (data) {
+          // if your controls use booleans set icons accordingly
+          if ('sala' in data) {
+            const s = !!data.sala;
+            document.getElementById('orb1').classList.toggle('active', s);
+          }
+        }
+      }, err => {
+        console.warn('casa listen err', err);
+        connectedCasa = false;
+        updateStatusAll();
+      });
+
+      // listen sensores
+      const sensRef = ref(db, 'sensores');
+      onValue(sensRef, snap => {
+        const data = snap.val();
+        connectedSensores = true;
+        updateStatusAll();
+        if (!data) return;
+
+        // read values t1..t4 & promedio
+        const t = [data.t1, data.t2, data.t3, data.t4];
+        let validArr = [];
+        for (let i=0;i<4;i++){
+          const vv = t[i];
+          if (typeof vv === 'number' && !isNaN(vv)) {
+            validArr.push(vv);
+            updateOrb(i+1, vv);
+          } else {
+            updateOrb(i+1, NaN);
+          }
+        }
+
+        // average: prefer server-provided promedio if numeric, else compute locally
+        let avg = null;
+        if (typeof data.promedio === 'number' && !isNaN(data.promedio)) {
+          avg = data.promedio;
+        } else if (validArr.length>0) {
+          const s = validArr.reduce((a,b)=>a+b,0);
+          avg = s / validArr.length;
+        }
+
+        if (avg !== null) {
+          document.getElementById('avgNow').innerText = avg.toFixed(2) + ' °C';
+          document.getElementById('avgNowHeader').innerText = avg.toFixed(2) + ' °C';
+          pushAverage(avg);
+        } else {
+          document.getElementById('avgNow').innerText = '-- °C';
+          document.getElementById('avgNowHeader').innerText = '-- °C';
+        }
+      }, err => {
+        console.warn('sensores listen err', err);
+        connectedSensores = false;
+        updateStatusAll();
+      });
+
+      // initial status
+      updateStatusAll();
+
+    } catch (e) {
+      console.error('initFirebase error', e);
+      connectedCasa = connectedSensores = false;
+      updateStatusAll();
+    }
+  }
+
+  // config modal functions
+  window.openConfig = ()=> document.getElementById('configModal').classList.remove('hidden');
+  window.closeConfig = ()=> document.getElementById('configModal').classList.add('hidden');
+  window.saveConfig = ()=> {
+    const key = document.getElementById('apiKeyInput').value.trim();
+    const url = document.getElementById('dbUrlInput').value.trim();
+    if (!key || !url) return Swal.fire('Error','Faltan datos','error');
+    localStorage.setItem('iot_api_key', key);
+    localStorage.setItem('iot_db_url', url);
+    initFirebase(key, url);
+    closeConfig();
+  };
+
+  // expose updateState original (unchanged)
+  window.updateState = async (path, value) => {
+    if (!db) return Swal.fire('Error','Configura Firebase primero','warning');
+    try {
+      await set(ref(db, 'casa/' + path), value);
+    } catch (e) {
+      console.error('set error', e);
+    }
+  };
+
+  // auto init if saved
+  (function autoInit(){
+    const sk = localStorage.getItem('iot_api_key');
+    const su = localStorage.getItem('iot_db_url');
+    if (sk && su) {
+      document.getElementById('apiKeyInput').value = sk;
+      document.getElementById('dbUrlInput').value = su;
+      initFirebase(sk, su);
+    } else {
+      // open config to encourage user
+      setTimeout(()=> openConfig(), 800);
+    }
+  })();
+
+  // ensure chart resizes on window change
+  window.addEventListener('resize', ()=> chart.resize());
+
+</script>
+
+</body>
+</html>
